@@ -7,6 +7,7 @@ This feature provides three reusable Terraform modules for AWS services — RDS 
 Each module enforces organizational governance through mandatory tagging (cost_center, project_name, environment), input validation (environment restricted to dev/qa/uat/prod, cost_center to 1000–9999), and sensible defaults for all non-required variables. Database modules (RDS Aurora MySQL and DynamoDB) additionally provision IAM-based authentication with development IAM users, eliminating password-based access patterns.
 
 The design follows a shared-variable pattern where common inputs (tier, regions, workload name, tags) are defined once in a root module and passed consistently to each child module, ensuring uniform behavior across all three services.
+From the root module, we can define which of the child modules will be created using a list of components, i.e. "dynamodb" or "dynamodb, s3" or "aurora, s3".
 
 ## Architecture
 
@@ -14,9 +15,9 @@ The design follows a shared-variable pattern where common inputs (tier, regions,
 graph TD
     Root["Root Module<br/>(terraform-tiered-aws-modules)"]
 
-    Root --> RDS["modules/rds-aurora-mysql"]
-    Root --> DDB["modules/dynamodb"]
-    Root --> S3["modules/s3"]
+    Root -->|"'aurora' ∈ components"| RDS["modules/rds-aurora-mysql"]
+    Root -->|"'dynamodb' ∈ components"| DDB["modules/dynamodb"]
+    Root -->|"'s3' ∈ components"| S3["modules/s3"]
 
     RDS --> RDS_T0["Tier 0: Multi-AZ + Multi-Region<br/>Aurora Global Database<br/>Hourly Backups"]
     RDS --> RDS_T1["Tier 1: Multi-AZ<br/>Single Region Cluster<br/>3-Hour Backups"]
@@ -34,6 +35,7 @@ graph TD
     DDB --> IAM_DDB["IAM Policy<br/>Dev IAM Users"]
 
     subgraph "Shared Inputs"
+        Comp["components: list(string)<br/>e.g. 'aurora', 'dynamodb', 's3'"]
         Tier["tier_of_protection: 0|1|2"]
         PR["primary_region"]
         SR["secondary_region"]
@@ -41,6 +43,7 @@ graph TD
         Tags["tags: cost_center,<br/>project_name, environment"]
     end
 
+    Root -.-> Comp
     Root -.-> Tier
     Root -.-> PR
     Root -.-> SR
@@ -64,15 +67,22 @@ sequenceDiagram
 
     User->>Root: terraform apply (vars)
     Root->>Val: Validate inputs
+    Val-->>Val: Check components ⊆ {"aurora","dynamodb","s3"} ∧ |components| > 0
     Val-->>Val: Check tier ∈ {0,1,2}
     Val-->>Val: Check environment ∈ {dev,qa,uat,prod}
     Val-->>Val: Check cost_center ∈ [1000,9999]
     Val-->>Val: Check secondary_region if tier=0
     Val-->>Root: Validation passed
 
-    Root->>RDS: Deploy Aurora (tier, regions, tags)
-    Root->>DDB: Deploy DynamoDB (tier, regions, tags)
-    Root->>S3M: Deploy S3 (tier, regions, tags)
+    alt "aurora" ∈ components
+        Root->>RDS: Deploy Aurora (tier, regions, tags)
+    end
+    alt "dynamodb" ∈ components
+        Root->>DDB: Deploy DynamoDB (tier, regions, tags)
+    end
+    alt "s3" ∈ components
+        Root->>S3M: Deploy S3 (tier, regions, tags)
+    end
 
     par RDS Deployment
         RDS->>AWS: Create Aurora Cluster (primary)
@@ -210,13 +220,26 @@ variable "environment" {
     error_message = "environment must be one of: dev, qa, uat, prod."
   }
 }
+
+variable "components" {
+  type        = list(string)
+  description = "List of child modules to deploy. Valid values: aurora, dynamodb, s3."
+  validation {
+    condition     = length(var.components) > 0
+    error_message = "components must not be empty."
+  }
+  validation {
+    condition     = alltrue([for c in var.components : contains(["aurora", "dynamodb", "s3"], c)])
+    error_message = "Each component must be one of: aurora, dynamodb, s3."
+  }
+}
 ```
 
 **Responsibilities**:
-- Validate all shared inputs before passing to child modules
+- Validate all shared inputs (including `components` list) before passing to child modules
 - Construct the common tags map from mandatory tag variables
-- Invoke each service module with consistent parameters
-- Aggregate and expose outputs from all child modules
+- Conditionally invoke each service module based on whether its name appears in `var.components`
+- Aggregate and conditionally expose outputs from deployed child modules only
 
 ### Component 2: RDS Aurora MySQL Module
 
@@ -437,6 +460,10 @@ locals {
     workload     = var.workload_name
     managed_by   = "terraform"
   }
+
+  deploy_aurora   = contains(var.components, "aurora")
+  deploy_dynamodb = contains(var.components, "dynamodb")
+  deploy_s3       = contains(var.components, "s3")
 }
 ```
 
@@ -726,9 +753,9 @@ resource "aws_iam_user_policy" "dynamodb_access" {
 ### Tier-Based Resource Configuration Algorithm
 
 ```pascal
-ALGORITHM configureTierResources(tier, primary_region, secondary_region, workload_name, tags)
-INPUT: tier ∈ {0, 1, 2}, primary_region: String, secondary_region: String, workload_name: String, tags: Map
-OUTPUT: Deployed AWS resources per tier specification
+ALGORITHM configureTierResources(tier, primary_region, secondary_region, workload_name, tags, components)
+INPUT: tier ∈ {0, 1, 2}, primary_region: String, secondary_region: String, workload_name: String, tags: Map, components: List of String
+OUTPUT: Deployed AWS resources per tier specification for selected components
 
 BEGIN
   ASSERT tier ∈ {0, 1, 2}
@@ -736,6 +763,8 @@ BEGIN
   ASSERT tags CONTAINS "cost_center" AND tags CONTAINS "project_name" AND tags CONTAINS "environment"
   ASSERT tags["environment"] ∈ {"dev", "qa", "uat", "prod"}
   ASSERT tonumber(tags["cost_center"]) >= 1000 AND tonumber(tags["cost_center"]) <= 9999
+  ASSERT length(components) > 0
+  ASSERT FOR ALL c IN components: c ∈ {"aurora", "dynamodb", "s3"}
 
   IF tier = 0 THEN
     ASSERT secondary_region IS NOT EMPTY
@@ -745,52 +774,63 @@ BEGIN
   // Step 1: Resolve tier configuration
   config ← tier_config[tier]
 
-  // Step 2: Deploy RDS Aurora MySQL
-  rds_cluster ← CREATE aurora_cluster(
-    region       = primary_region,
-    multi_az     = config.multi_az,
-    iam_auth     = true,
-    backup_cron  = config.backup_cron
-  )
+  // Step 2: Resolve component selection
+  deploy_aurora   ← "aurora" ∈ components
+  deploy_dynamodb ← "dynamodb" ∈ components
+  deploy_s3       ← "s3" ∈ components
 
-  IF config.multi_region THEN
-    global_db ← CREATE aurora_global_database(primary = rds_cluster)
-    secondary_cluster ← CREATE aurora_cluster(region = secondary_region, global_db = global_db)
+  // Step 3: Deploy RDS Aurora MySQL (conditional)
+  IF deploy_aurora THEN
+    rds_cluster ← CREATE aurora_cluster(
+      region       = primary_region,
+      multi_az     = config.multi_az,
+      iam_auth     = true,
+      backup_cron  = config.backup_cron
+    )
+
+    IF config.multi_region THEN
+      global_db ← CREATE aurora_global_database(primary = rds_cluster)
+      secondary_cluster ← CREATE aurora_cluster(region = secondary_region, global_db = global_db)
+    END IF
+
+    rds_iam_user ← CREATE iam_user(name = workload_name + "-dev-db-user", policy = "rds-db:connect")
   END IF
 
-  rds_iam_user ← CREATE iam_user(name = workload_name + "-dev-db-user", policy = "rds-db:connect")
+  // Step 4: Deploy DynamoDB (conditional)
+  IF deploy_dynamodb THEN
+    ddb_table ← CREATE dynamodb_table(
+      region = primary_region,
+      pitr   = (tier <= 1)
+    )
 
-  // Step 3: Deploy DynamoDB
-  ddb_table ← CREATE dynamodb_table(
-    region = primary_region,
-    pitr   = (tier <= 1)
-  )
+    IF config.multi_region THEN
+      ADD replica(ddb_table, region = secondary_region)
+    END IF
 
-  IF config.multi_region THEN
-    ADD replica(ddb_table, region = secondary_region)
+    IF tier <= 1 THEN
+      CREATE backup_export_schedule(table = ddb_table, cron = config.backup_cron)
+    ELSE
+      CREATE aws_backup_plan(table = ddb_table, cron = config.backup_cron)
+    END IF
+
+    ddb_iam_user ← CREATE iam_user(name = workload_name + "-dev-db-user", policy = "dynamodb:CRUD")
   END IF
 
-  IF tier <= 1 THEN
-    CREATE backup_export_schedule(table = ddb_table, cron = config.backup_cron)
-  ELSE
-    CREATE aws_backup_plan(table = ddb_table, cron = config.backup_cron)
+  // Step 5: Deploy S3 (conditional)
+  IF deploy_s3 THEN
+    s3_bucket ← CREATE s3_bucket(
+      region     = primary_region,
+      versioning = (tier <= 1),
+      encryption = "aws:kms"
+    )
+
+    IF config.multi_region THEN
+      replica_bucket ← CREATE s3_bucket(region = secondary_region)
+      CREATE replication_configuration(source = s3_bucket, destination = replica_bucket)
+    END IF
   END IF
 
-  ddb_iam_user ← CREATE iam_user(name = workload_name + "-dev-db-user", policy = "dynamodb:CRUD")
-
-  // Step 4: Deploy S3
-  s3_bucket ← CREATE s3_bucket(
-    region     = primary_region,
-    versioning = (tier <= 1),
-    encryption = "aws:kms"
-  )
-
-  IF config.multi_region THEN
-    replica_bucket ← CREATE s3_bucket(region = secondary_region)
-    CREATE replication_configuration(source = s3_bucket, destination = replica_bucket)
-  END IF
-
-  RETURN {rds_cluster, ddb_table, s3_bucket, rds_iam_user, ddb_iam_user}
+  RETURN deployed resources for selected components
 END
 ```
 
@@ -808,11 +848,21 @@ END
 ### Validation Algorithm
 
 ```pascal
-ALGORITHM validateInputs(tier, primary_region, secondary_region, workload_name, cost_center, project_name, environment)
+ALGORITHM validateInputs(tier, primary_region, secondary_region, workload_name, cost_center, project_name, environment, components)
 INPUT: All root module variables
 OUTPUT: isValid: Boolean
 
 BEGIN
+  // Validate components
+  IF length(components) = 0 THEN
+    RETURN false WITH "components must not be empty"
+  END IF
+  FOR EACH c IN components DO
+    IF c NOT IN {"aurora", "dynamodb", "s3"} THEN
+      RETURN false WITH "Each component must be one of: aurora, dynamodb, s3"
+    END IF
+  END FOR
+
   // Validate tier
   IF tier NOT IN {0, 1, 2} THEN
     RETURN false WITH "tier_of_protection must be 0, 1, or 2"
@@ -861,6 +911,7 @@ END
 module "tiered_aws" {
   source = "./modules"
 
+  components         = ["dynamodb", "s3"]
   tier_of_protection = 2
   primary_region     = "us-east-1"
   workload_name      = "my-app"
@@ -877,6 +928,7 @@ module "tiered_aws" {
 module "tiered_aws" {
   source = "./modules"
 
+  components         = ["aurora", "dynamodb", "s3"]
   tier_of_protection = 0
   primary_region     = "us-east-1"
   secondary_region   = "eu-west-1"
@@ -894,6 +946,7 @@ module "tiered_aws" {
 module "tiered_aws" {
   source = "./modules"
 
+  components         = ["aurora", "dynamodb", "s3"]
   tier_of_protection = 0
   primary_region     = "us-west-2"
   secondary_region   = "us-east-1"
@@ -912,28 +965,45 @@ module "tiered_aws" {
 }
 ```
 
+### Selective Component Deployment (DynamoDB Only)
+
+```hcl
+module "tiered_aws" {
+  source = "./modules"
+
+  components         = ["dynamodb"]
+  tier_of_protection = 1
+  primary_region     = "us-east-1"
+  workload_name      = "session-store"
+
+  cost_center  = "2200"
+  project_name = "web-platform"
+  environment  = "qa"
+}
+```
+
 ### Accessing Outputs
 
 ```hcl
-# After apply, access module outputs
+# After apply, access module outputs (conditional on deployed components)
 output "rds_cluster_endpoint" {
-  value = module.tiered_aws.rds_cluster_endpoint
+  value = contains(var.components, "aurora") ? module.rds_aurora_mysql[0].cluster_endpoint : null
 }
 
 output "dynamodb_table_name" {
-  value = module.tiered_aws.dynamodb_table_name
+  value = contains(var.components, "dynamodb") ? module.dynamodb[0].table_name : null
 }
 
 output "s3_bucket_id" {
-  value = module.tiered_aws.s3_bucket_id
+  value = contains(var.components, "s3") ? module.s3[0].bucket_id : null
 }
 
 output "rds_iam_user_arn" {
-  value = module.tiered_aws.rds_dev_iam_user_arn
+  value = contains(var.components, "aurora") ? module.rds_aurora_mysql[0].dev_iam_user_arn : null
 }
 
 output "dynamodb_iam_user_arn" {
-  value = module.tiered_aws.dynamodb_dev_iam_user_arn
+  value = contains(var.components, "dynamodb") ? module.dynamodb[0].dev_iam_user_arn : null
 }
 ```
 
@@ -986,9 +1056,15 @@ output "dynamodb_iam_user_arn" {
 
 ### Property 8: Validation Completeness
 
-*For any* input where `tier_of_protection` is not in {0,1,2}, or `environment` is not in {dev,qa,uat,prod}, or `cost_center` is not a 4-digit number in [1000,9999], or `workload_name` contains characters outside `[a-z0-9-]`, `terraform plan` shall fail with a descriptive error message. No invalid input shall produce a successful plan.
+*For any* input where `tier_of_protection` is not in {0,1,2}, or `environment` is not in {dev,qa,uat,prod}, or `cost_center` is not a 4-digit number in [1000,9999], or `workload_name` contains characters outside `[a-z0-9-]`, or `components` is empty, or `components` contains a value not in {"aurora","dynamodb","s3"}, `terraform plan` shall fail with a descriptive error message. No invalid input shall produce a successful plan.
 
-**Validates: Requirements 1.1, 1.2, 1.3, 1.4**
+**Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.7, 1.8, 13.2**
+
+### Property 9: Component Selection Invariant
+
+*For any* valid deployment with a given `components` list, only the child modules whose names appear in `components` shall be instantiated. If `"aurora"` is not in `components`, no RDS Aurora resources shall exist in the plan. If `"dynamodb"` is not in `components`, no DynamoDB resources shall exist in the plan. If `"s3"` is not in `components`, no S3 resources shall exist in the plan. Conversely, every component name present in `components` shall produce its corresponding module's resources.
+
+**Validates: Requirements 13.3, 13.4, 13.5, 13.6, 13.7, 11.5, 11.6**
 
 ## Error Handling
 
@@ -1016,13 +1092,19 @@ output "dynamodb_iam_user_arn" {
 **Response**: Terraform validation block rejects with: "cost_center must be a number between 1000 and 9999."
 **Recovery**: User provides a valid cost center code
 
-### Error Scenario 5: Aurora Global Database Region Conflict
+### Error Scenario 5: Empty or Invalid Components List
+
+**Condition**: `components` is empty or contains a value not in {"aurora", "dynamodb", "s3"}
+**Response**: Terraform validation block rejects with: "components must not be empty." or "Each component must be one of: aurora, dynamodb, s3."
+**Recovery**: User provides a valid components list (e.g., `["dynamodb", "s3"]`)
+
+### Error Scenario 6: Aurora Global Database Region Conflict
 
 **Condition**: `secondary_region` equals `primary_region` when tier = 0
 **Response**: AWS API returns error during Aurora Global Database creation
 **Recovery**: Custom validation added to reject same-region configurations at plan time
 
-### Error Scenario 6: Insufficient IAM Permissions
+### Error Scenario 7: Insufficient IAM Permissions
 
 **Condition**: Terraform execution role lacks permissions to create IAM users or database resources
 **Response**: AWS API returns AccessDenied errors during apply

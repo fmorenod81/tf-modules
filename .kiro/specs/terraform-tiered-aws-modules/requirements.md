@@ -14,6 +14,7 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 - **Common_Tags**: A map of mandatory tags (cost_center, project_name, environment, workload, managed_by) applied to every resource.
 - **Dev_IAM_User**: An IAM user created by database modules for development access, with permissions scoped to the specific database resource.
 - **Validation_Engine**: The Terraform variable validation blocks that enforce input constraints at plan time.
+- **Components_List**: A required list of strings variable (`components`) that controls which child modules are deployed. Valid values are "aurora", "dynamodb", and "s3". The list must be non-empty and each element must be a member of the valid set.
 
 ## Requirements
 
@@ -29,6 +30,8 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 4. WHEN an operator provides a `workload_name` that does not match the pattern `^[a-z0-9-]+$`, THE Validation_Engine SHALL reject the plan with the message "workload_name must be lowercase alphanumeric with hyphens only."
 5. WHEN an operator sets `tier_of_protection` to 0 and provides an empty `secondary_region`, THE Validation_Engine SHALL reject the plan with the message "secondary_region is required when tier_of_protection is 0."
 6. WHEN an operator provides a `primary_region` that is empty, THE Validation_Engine SHALL reject the plan with a descriptive error.
+7. WHEN an operator provides a `components` list that is empty, THE Validation_Engine SHALL reject the plan with the message "components must not be empty."
+8. WHEN an operator provides a `components` list containing a value not in {"aurora", "dynamodb", "s3"}, THE Validation_Engine SHALL reject the plan with the message "Each component must be one of: aurora, dynamodb, s3."
 
 ### Requirement 2: Mandatory Tagging
 
@@ -123,8 +126,8 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 
 #### Acceptance Criteria
 
-1. THE Root_Module SHALL define `tier_of_protection`, `primary_region`, `secondary_region`, `workload_name`, `cost_center`, `project_name`, and `environment` as input variables with validation.
-2. THE Root_Module SHALL pass `tier_of_protection`, `primary_region`, `secondary_region`, `workload_name`, and the Common_Tags map to each child module.
+1. THE Root_Module SHALL define `tier_of_protection`, `primary_region`, `secondary_region`, `workload_name`, `cost_center`, `project_name`, `environment`, and `components` as input variables with validation.
+2. THE Root_Module SHALL pass `tier_of_protection`, `primary_region`, `secondary_region`, `workload_name`, and the Common_Tags map to each deployed child module.
 3. WHEN a child module receives the shared variables, THE child module SHALL use the `tier_of_protection` value to determine its resource configuration.
 
 ### Requirement 10: Sensible Defaults
@@ -136,7 +139,8 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 1. THE RDS_Aurora_Module SHALL default `engine_version` to "8.0.mysql_aurora.3.05.2", `instance_class` to "db.r6g.large", `instance_count` to 2, `database_name` to "app", `backup_retention_period` to 7, `deletion_protection` to true, and `storage_encrypted` to true.
 2. THE DynamoDB_Module SHALL default `billing_mode` to "PAY_PER_REQUEST", `hash_key` to "id", `hash_key_type` to "S", `range_key` to "", `range_key_type` to "S", `enable_encryption` to true, and `table_class` to "STANDARD".
 3. THE S3_Module SHALL default `force_destroy` to false, `block_public_access` to true, `sse_algorithm` to "aws:kms", and `noncurrent_version_expiration_days` to 90.
-4. WHEN an operator does not override any defaulted variable, THE module SHALL deploy successfully using only the required variables (`tier_of_protection`, `primary_region`, `workload_name`, `cost_center`, `project_name`, `environment`).
+4. WHEN an operator does not override any defaulted variable, THE module SHALL deploy successfully using only the required variables (`tier_of_protection`, `primary_region`, `workload_name`, `cost_center`, `project_name`, `environment`, `components`).
+5. THE Root_Module SHALL define `components` as a required variable with no default value.
 
 ### Requirement 11: Module Outputs
 
@@ -148,6 +152,8 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 2. THE Root_Module SHALL output the DynamoDB table name and ARN.
 3. THE Root_Module SHALL output the S3 bucket ID and ARN.
 4. THE Root_Module SHALL output the Dev_IAM_User ARN for both the RDS and DynamoDB modules.
+5. WHEN a component is not included in the Components_List, THE Root_Module SHALL output `null` for that component's outputs.
+6. WHEN a component is included in the Components_List, THE Root_Module SHALL output the corresponding resource identifiers for that component.
 
 ### Requirement 12: Tier Consistency Across Modules
 
@@ -159,3 +165,17 @@ This document defines the requirements for the Terraform Tiered AWS Modules feat
 2. WHEN `tier_of_protection` is 0, THE RDS_Aurora_Module, DynamoDB_Module, and S3_Module SHALL each deploy multi-region resources.
 3. WHEN `tier_of_protection` is 1, THE RDS_Aurora_Module, DynamoDB_Module, and S3_Module SHALL each deploy multi-AZ or single-region resources with no cross-region components.
 4. WHEN `tier_of_protection` is 2, THE RDS_Aurora_Module, DynamoDB_Module, and S3_Module SHALL each deploy single-AZ, single-region resources.
+
+### Requirement 13: Selectable Component Deployment
+
+**User Story:** As a module consumer, I want to choose which child modules are deployed via a `components` variable, so that I can provision only the AWS services my workload needs.
+
+#### Acceptance Criteria
+
+1. THE Root_Module SHALL accept a `components` variable of type `list(string)` with valid values from the set {"aurora", "dynamodb", "s3"}.
+2. THE Validation_Engine SHALL reject a plan where `components` is empty or contains a value not in {"aurora", "dynamodb", "s3"}.
+3. WHEN "aurora" is included in the Components_List, THE Root_Module SHALL invoke the RDS_Aurora_Module.
+4. WHEN "dynamodb" is included in the Components_List, THE Root_Module SHALL invoke the DynamoDB_Module.
+5. WHEN "s3" is included in the Components_List, THE Root_Module SHALL invoke the S3_Module.
+6. WHEN a component name is not included in the Components_List, THE Root_Module SHALL produce zero resources for that component's child module.
+7. WHEN a component name is not included in the Components_List, THE Root_Module SHALL output `null` for that component's resource identifiers.
