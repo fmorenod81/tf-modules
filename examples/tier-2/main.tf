@@ -1,10 +1,11 @@
 # -----------------------------------------------------------------------------
 # Tier 2 Minimal Deployment Example
 # -----------------------------------------------------------------------------
-# This example deploys all three modules (RDS Aurora MySQL, DynamoDB, S3) with
-# Tier 2 protection: single-AZ, single-region availability with daily backups
-# at 1 AM GMT. No multi-AZ replicas, no cross-region replication, no PITR,
-# and S3 versioning is suspended. Ideal for non-critical or dev workloads.
+# This example deploys all four modules (RDS Aurora MySQL, RDS PostgreSQL,
+# DynamoDB, S3) with Tier 2 protection: single-AZ, single-region availability
+# with daily backups at 1 AM GMT. No multi-AZ replicas, no cross-region
+# replication, no PITR, and S3 versioning is suspended. Ideal for non-critical
+# or dev workloads.
 # -----------------------------------------------------------------------------
 
 terraform {
@@ -69,8 +70,13 @@ output "s3_bucket_arn" {
 }
 
 output "rds_dev_iam_user_arn" {
-  description = "ARN of the dev IAM user for RDS access"
+  description = "ARN of the dev IAM user for RDS MySQL access"
   value       = module.tiered_aws.rds_dev_iam_user_arn
+}
+
+output "rds_postgresql_dev_iam_user_arn" {
+  description = "ARN of the dev IAM user for RDS PostgreSQL access"
+  value       = module.tiered_aws.rds_postgresql_dev_iam_user_arn
 }
 
 output "dynamodb_dev_iam_user_arn" {

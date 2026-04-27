@@ -2,9 +2,16 @@
 
 ```
 .
-├── main.tf                        # Root module — composes all three child modules
+├── main.tf                        # Root module — composes all four child modules
 ├── modules/
 │   ├── rds-aurora-mysql/          # Aurora MySQL module
+│   │   ├── main.tf                # Cluster, instances (primary + secondary)
+│   │   ├── locals.tf              # tier_config map + derived locals
+│   │   ├── variables.tf           # Input variables
+│   │   ├── outputs.tf             # Exported values
+│   │   ├── iam.tf                 # Dev IAM user + policy
+│   │   └── versions.tf            # Provider requirements + aliases
+│   ├── rds-postgresql/            # Aurora PostgreSQL module
 │   │   ├── main.tf                # Cluster, instances (primary + secondary)
 │   │   ├── locals.tf              # tier_config map + derived locals
 │   │   ├── variables.tf           # Input variables

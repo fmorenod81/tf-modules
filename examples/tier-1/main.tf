@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
 # Tier 1 Multi-AZ Deployment Example
 # -----------------------------------------------------------------------------
-# This example deploys all three modules (RDS Aurora MySQL, DynamoDB, S3) with
-# Tier 1 protection: multi-AZ availability within a single region, 3-hour
-# backup schedules, PITR for DynamoDB, and S3 versioning enabled.
+# This example deploys all four modules (RDS Aurora MySQL, RDS PostgreSQL,
+# DynamoDB, S3) with Tier 1 protection: multi-AZ availability within a single
+# region, 3-hour backup schedules, PITR for DynamoDB, and S3 versioning enabled.
 # No cross-region replication or global tables are provisioned.
 # -----------------------------------------------------------------------------
 
@@ -69,8 +69,13 @@ output "s3_bucket_arn" {
 }
 
 output "rds_dev_iam_user_arn" {
-  description = "ARN of the dev IAM user for RDS access"
+  description = "ARN of the dev IAM user for RDS MySQL access"
   value       = module.tiered_aws.rds_dev_iam_user_arn
+}
+
+output "rds_postgresql_dev_iam_user_arn" {
+  description = "ARN of the dev IAM user for RDS PostgreSQL access"
+  value       = module.tiered_aws.rds_postgresql_dev_iam_user_arn
 }
 
 output "dynamodb_dev_iam_user_arn" {

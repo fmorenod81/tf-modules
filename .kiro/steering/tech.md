@@ -6,6 +6,7 @@
 
 ## AWS Services Used
 - RDS Aurora MySQL (engine: `aurora-mysql`, default version `8.0.mysql_aurora.3.05.2`)
+- RDS Aurora PostgreSQL (engine: `aurora-postgresql`, default version `14.12`)
 - DynamoDB
 - S3
 - AWS Backup (for DynamoDB and RDS backup plans)

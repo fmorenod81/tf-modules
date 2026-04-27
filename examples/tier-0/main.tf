@@ -1,9 +1,10 @@
 # -----------------------------------------------------------------------------
 # Tier 0 Multi-Region Deployment Example
 # -----------------------------------------------------------------------------
-# This example deploys all three modules (RDS Aurora MySQL, DynamoDB, S3) with
-# Tier 0 protection: multi-AZ + multi-region availability, hourly backups,
-# Aurora Global Database, DynamoDB Global Tables, and S3 cross-region replication.
+# This example deploys all four modules (RDS Aurora MySQL, RDS PostgreSQL,
+# DynamoDB, S3) with Tier 0 protection: multi-AZ + multi-region availability,
+# hourly backups, Aurora Global Database, DynamoDB Global Tables,
+# and S3 cross-region replication.
 # -----------------------------------------------------------------------------
 
 terraform {
@@ -69,8 +70,13 @@ output "s3_bucket_arn" {
 }
 
 output "rds_dev_iam_user_arn" {
-  description = "ARN of the dev IAM user for RDS access"
+  description = "ARN of the dev IAM user for RDS MySQL access"
   value       = module.tiered_aws.rds_dev_iam_user_arn
+}
+
+output "rds_postgresql_dev_iam_user_arn" {
+  description = "ARN of the dev IAM user for RDS PostgreSQL access"
+  value       = module.tiered_aws.rds_postgresql_dev_iam_user_arn
 }
 
 output "dynamodb_dev_iam_user_arn" {
